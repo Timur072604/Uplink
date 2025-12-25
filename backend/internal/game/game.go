@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"log/slog"
 	"math"
+	"math/big"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 	"uplink/backend/internal/db"
@@ -21,9 +23,9 @@ const (
 	AntiCheatMinMean     = 40.0
 	AntiCheatMinVariance = 5.0
 	MatchmakingBaseRange = 100.0
-	MatchmakingTimeMult  = 10.0
-	RatingChangeK        = 10
+	MatchmakingTimeMult  = 50.0
 	WPMCharCount         = 5.0
+	EloKFactor           = 32.0
 
 	InputBufferSize = 30
 	MinInputSamples = 20
@@ -52,14 +54,15 @@ type Client struct {
 	joinTime     time.Time
 	send         chan any
 
-	mu        sync.Mutex
-	Progress  float64
-	WPM       float64
-	Finished  bool
-	Ready     bool
-	lastInput time.Time
-	lastIdx   int
-	intervals []int64
+	mu           sync.Mutex
+	Progress     float64
+	WPM          float64
+	Finished     bool
+	Disqualified bool
+	Ready        bool
+	lastInput    time.Time
+	lastIdx      int
+	intervals    []int64
 }
 
 type Manager struct {
@@ -109,7 +112,7 @@ func (m *Manager) HandleWS(w http.ResponseWriter, r *http.Request, uid, user str
 	rid := r.URL.Query().Get("room_id")
 	if rid == "" {
 		var msg struct {
-			Payload struct{ Mode, Language string }
+			Payload struct{ Mode, Language, TextMode string }
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), time.Second*5)
 		if err := wsjson.Read(ctx, c, &msg); err != nil {
@@ -125,8 +128,13 @@ func (m *Manager) HandleWS(w http.ResponseWriter, r *http.Request, uid, user str
 			rating = u.Rating
 		}
 
+		textMode := msg.Payload.TextMode
+		if textMode != "generate" {
+			textMode = "standard"
+		}
+
 		m.qMu.Lock()
-		k := msg.Payload.Language + ":" + msg.Payload.Mode
+		k := msg.Payload.Language + "|" + textMode
 		m.queues[k] = append(m.queues[k], &Client{ID: uid, Username: user, Rating: rating, conn: c, joinTime: time.Now(), send: make(chan any, 64)})
 		m.qMu.Unlock()
 		return
@@ -160,6 +168,12 @@ func (m *Manager) matchmaker() {
 					continue
 				}
 
+				parts := strings.Split(k, "|")
+				if len(parts) != 2 {
+					continue
+				}
+				lang, textMode := parts[0], parts[1]
+
 				sort.Slice(q, func(i, j int) bool { return q[i].Rating < q[j].Rating })
 
 				var next []*Client
@@ -175,7 +189,7 @@ func (m *Manager) matchmaker() {
 
 					if diff <= MatchmakingBaseRange+wait*MatchmakingTimeMult {
 						matched[i], matched[i+1] = true, true
-						go m.startMatch(p1, p2)
+						go m.startMatch(p1, p2, lang, textMode)
 					}
 				}
 
@@ -191,8 +205,21 @@ func (m *Manager) matchmaker() {
 	}
 }
 
-func (m *Manager) startMatch(p1, p2 *Client) {
-	rid := m.CreateRoom(p1.ID, "matchmaking", Settings{MaxPlayers: 2, Language: "en"})
+func (m *Manager) startMatch(p1, p2 *Client, lang, textMode string) {
+	cat := "general"
+	if textMode == "standard" {
+		cats := []string{"general", "literature", "code"}
+		if n, err := rand.Int(rand.Reader, big.NewInt(int64(len(cats)))); err == nil {
+			cat = cats[n.Int64()]
+		}
+	}
+
+	rid := m.CreateRoom(p1.ID, "matchmaking", Settings{
+		MaxPlayers: 2,
+		Language:   lang,
+		TextMode:   textMode,
+		Category:   cat,
+	})
 	msg := map[string]any{"type": "match_found", "payload": map[string]string{"room_id": rid}}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
@@ -211,13 +238,14 @@ type Room struct {
 	Text            *db.Text
 	StartTime       time.Time
 
-	clients    map[string]*Client
-	mu         sync.RWMutex
-	db         *db.DB
-	log        *slog.Logger
-	broadcast  chan any
-	unregister chan string
-	input      chan *inputMsg
+	clients      map[string]*Client
+	participants []*Client
+	mu           sync.RWMutex
+	db           *db.DB
+	log          *slog.Logger
+	broadcast    chan any
+	unregister   chan string
+	input        chan *inputMsg
 }
 
 type inputMsg struct {
@@ -247,13 +275,39 @@ func (r *Room) run(cleanup func()) {
 			if c, ok := r.clients[uid]; ok {
 				delete(r.clients, uid)
 				close(c.send)
+
+				if r.State == StateGame {
+					c.mu.Lock()
+					c.Disqualified = true
+					c.Finished = true
+					c.mu.Unlock()
+				}
 			}
-			empty := len(r.clients) == 0
+
+			allFinished := true
+			if r.State == StateGame {
+				for _, p := range r.participants {
+					p.mu.Lock()
+					if !p.Finished {
+						allFinished = false
+					}
+					p.mu.Unlock()
+				}
+			} else {
+				allFinished = len(r.clients) == 0
+			}
+
 			r.mu.Unlock()
-			if empty {
+
+			if r.State == StateGame && allFinished {
+				r.finish()
+			} else if r.State != StateGame && allFinished {
 				return
 			}
-			r.sendPlayers()
+
+			if r.State != StateFinished {
+				r.sendPlayers()
+			}
 		case in := <-r.input:
 			r.handleInput(in.c, in.idx)
 		case <-ticker.C:
@@ -411,10 +465,12 @@ func (r *Room) startGame() {
 	r.State = StateGame
 	r.StartTime = time.Now().Add(StartDelay)
 
+	r.participants = make([]*Client, 0, len(r.clients))
 	for _, c := range r.clients {
 		c.mu.Lock()
-		c.Progress, c.WPM, c.Finished, c.lastIdx, c.lastInput, c.intervals = 0, 0, false, 0, r.StartTime, nil
+		c.Progress, c.WPM, c.Finished, c.Disqualified, c.lastIdx, c.lastInput, c.intervals = 0, 0, false, false, 0, r.StartTime, nil
 		c.mu.Unlock()
+		r.participants = append(r.participants, c)
 	}
 	r.mu.Unlock()
 
@@ -434,7 +490,7 @@ func (r *Room) handleInput(c *Client, idx int) {
 	r.mu.RUnlock()
 
 	c.mu.Lock()
-	if idx <= c.lastIdx {
+	if c.Disqualified || idx <= c.lastIdx {
 		c.mu.Unlock()
 		return
 	}
@@ -455,6 +511,8 @@ func (r *Room) handleInput(c *Client, idx int) {
 	variance := (sqSum / float64(len(c.intervals))) - (mean * mean)
 
 	if len(c.intervals) > MinInputSamples && (mean < AntiCheatMinMean || variance < AntiCheatMinVariance) {
+		c.Disqualified = true
+		c.Finished = true
 		c.mu.Unlock()
 		_ = c.conn.Close(websocket.StatusPolicyViolation, "обнаружен чит")
 		return
@@ -471,12 +529,12 @@ func (r *Room) handleInput(c *Client, idx int) {
 	if finished {
 		r.mu.RLock()
 		all := true
-		for _, cl := range r.clients {
-			cl.mu.Lock()
-			if !cl.Finished {
+		for _, p := range r.participants {
+			p.mu.Lock()
+			if !p.Finished {
 				all = false
 			}
-			cl.mu.Unlock()
+			p.mu.Unlock()
 			if !all {
 				break
 			}
@@ -496,10 +554,14 @@ func (r *Room) finish() {
 	}
 	r.State = StateFinished
 
-	res := make([]db.MatchResult, 0, len(r.clients))
-	for _, c := range r.clients {
+	res := make([]db.MatchResult, 0, len(r.participants))
+	for _, c := range r.participants {
 		c.mu.Lock()
-		res = append(res, db.MatchResult{UserID: c.ID, WPM: int(c.WPM), Accuracy: 100})
+		wpm := int(c.WPM)
+		if c.Disqualified {
+			wpm = 0
+		}
+		res = append(res, db.MatchResult{UserID: c.ID, WPM: wpm, Accuracy: 100})
 		c.mu.Unlock()
 	}
 	r.mu.Unlock()
@@ -510,10 +572,30 @@ func (r *Room) finish() {
 	for i := range res {
 		res[i].Rank = i + 1
 		change := 0
-		if r.Mode == "matchmaking" && len(res) >= 2 {
-			change = RatingChangeK
-			if err := r.db.UpdateRating(context.Background(), res[i].UserID, change); err != nil {
-				r.log.Error("ошибка обновления рейтинга", "err", err)
+
+		if r.Mode == "matchmaking" && len(res) == 2 {
+			p1 := res[0]
+			p2 := res[1]
+
+			u1, _ := r.db.GetUser(context.Background(), p1.UserID)
+			u2, _ := r.db.GetUser(context.Background(), p2.UserID)
+
+			if u1 != nil && u2 != nil {
+				score := 1.0
+				if i == 1 {
+					score = 0.0
+				}
+
+				myRating := u1.Rating
+				oppRating := u2.Rating
+				if i == 1 {
+					myRating, oppRating = u2.Rating, u1.Rating
+				}
+
+				change = calculateElo(myRating, oppRating, score)
+				if err := r.db.UpdateRating(context.Background(), res[i].UserID, change); err != nil {
+					r.log.Error("ошибка обновления рейтинга", "err", err)
+				}
 			}
 		}
 		states[i] = map[string]any{"user_id": res[i].UserID, "wpm": res[i].WPM, "finished": true, "rating_change": change}
@@ -522,6 +604,11 @@ func (r *Room) finish() {
 		r.log.Error("ошибка сохранения матча", "err", err)
 	}
 	r.broadcast <- map[string]any{"type": "game_end", "payload": map[string]any{"results": states}}
+}
+
+func calculateElo(ra, rb int, score float64) int {
+	ea := 1.0 / (1.0 + math.Pow(10.0, float64(rb-ra)/400.0))
+	return int(EloKFactor * (score - ea))
 }
 
 func genID() string {
