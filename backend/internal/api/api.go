@@ -3,9 +3,12 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +42,8 @@ type API struct {
 }
 
 func New(d *db.DB, g *game.Manager, s string, origins []string, l *slog.Logger) http.Handler {
+	fmt.Println(">>> [INIT] Запуск API и инициализация статики...")
+	
 	allowed := make(map[string]bool)
 	for _, o := range origins {
 		allowed[strings.TrimSpace(o)] = true
@@ -55,6 +60,8 @@ func New(d *db.DB, g *game.Manager, s string, origins []string, l *slog.Logger) 
 	go a.cleanupVisitors()
 
 	mux := http.NewServeMux()
+	
+
 	mux.HandleFunc("POST /api/v1/auth/register", a.register)
 	mux.HandleFunc("POST /api/v1/auth/login", a.login)
 
@@ -62,10 +69,39 @@ func New(d *db.DB, g *game.Manager, s string, origins []string, l *slog.Logger) 
 	mux.HandleFunc("GET /api/v1/users/me", auth(a.me))
 	mux.HandleFunc("GET /api/v1/users/history", auth(a.history))
 	mux.HandleFunc("GET /api/v1/leaderboard", auth(a.leaderboard))
-	mux.HandleFunc("POST /api/v1/rooms", auth(a.createRoom("lobby")))
-	mux.HandleFunc("POST /api/v1/practice", auth(a.createRoom("solo")))
 
-	mux.HandleFunc("/ws", a.ws)
+	mux.HandleFunc("GET /api/v1/lobbies", auth(a.handleGetLobbies))
+	mux.HandleFunc("POST /api/v1/lobby/create", auth(a.handleCreateManualLobby))
+	mux.HandleFunc("POST /api/v1/practice", auth(a.createRoom("solo")))
+	mux.HandleFunc("/ws/lobby/", a.handleLobbyWS)
+
+	mux.HandleFunc("/ws", a.handleWS)
+
+	staticDir := "./frontend/static"
+	fs := http.FileServer(http.Dir(staticDir))
+
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Printf("[HTTP] %s %s | IP: %s\n", r.Method, r.URL.Path, r.RemoteAddr)
+
+		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/ws" {
+			http.NotFound(w, r)
+			return
+		}
+
+		filePath := filepath.Join(staticDir, r.URL.Path)
+		fileInfo, err := os.Stat(filePath)
+
+		if os.IsNotExist(err) || (err == nil && fileInfo.IsDir()) {
+			fmt.Printf("[DEBUG] Файл не найден: %s. Отдаю Fallback: index.html\n", filePath)
+			http.ServeFile(w, r, filepath.Join(staticDir, "index.html"))
+			return
+		}
+
+		if err != nil {
+			fmt.Printf("[ERROR] Ошибка доступа к файлу %s: %v\n", filePath, err)
+		}
+		fs.ServeHTTP(w, r)
+	})
 
 	return a.corsMiddleware(a.rateLimitMiddleware(mux))
 }
@@ -101,7 +137,11 @@ func (a *API) register(w http.ResponseWriter, r *http.Request) {
 	}
 	a.sendToken(w, id, req.Username)
 }
-
+func (a *API) handleCreateManualLobby(w http.ResponseWriter, r *http.Request) {
+    uid := r.Context().Value(uidKey).(string)
+    roomID := a.gm.CreateManualLobby(uid)
+    a.json(w, map[string]string{"room_id": roomID}, 200)
+}
 func (a *API) login(w http.ResponseWriter, r *http.Request) {
 	var req struct{ Username, Password string }
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -115,7 +155,14 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 	}
 	a.sendToken(w, u.ID, u.Username)
 }
-
+func (a *API) getLeaderboard(w http.ResponseWriter, r *http.Request) {
+    list, err := a.db.GetLeaderboard(r.Context(), 50) // Топ-50
+    if err != nil {
+        a.error(w, "ошибка загрузки таблицы", 500)
+        return
+    }
+    a.json(w, list, 200)
+}
 func (a *API) sendToken(w http.ResponseWriter, id, name string) {
 	t, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub":      id,
@@ -130,11 +177,19 @@ func (a *API) sendToken(w http.ResponseWriter, id, name string) {
 }
 
 func (a *API) me(w http.ResponseWriter, r *http.Request) {
-	a.json(w, map[string]any{"id": r.Context().Value(uidKey)}, 200)
+    uid := r.Context().Value(uidKey).(string)
+    
+    user, err := a.db.GetUserByID(r.Context(), uid) 
+    if err != nil {
+        a.error(w, "пользователь не найден", 404)
+        return
+    }
+    a.json(w, user, 200)
 }
 
 func (a *API) history(w http.ResponseWriter, r *http.Request) {
-	d, next, err := a.db.GetHistory(r.Context(), r.Context().Value(uidKey).(string), 20, r.URL.Query().Get("cursor"))
+	uid, _ := r.Context().Value(uidKey).(string)
+	d, next, err := a.db.GetHistory(r.Context(), uid, 20, r.URL.Query().Get("cursor"))
 	if err != nil {
 		a.error(w, "ошибка бд", 500)
 		return
@@ -161,7 +216,8 @@ func (a *API) createRoom(mode string) http.HandlerFunc {
 		if mode == "solo" {
 			s.MaxPlayers = 1
 		}
-		rm := a.gm.CreateRoom(r.Context().Value(uidKey).(string), mode, s)
+		uid, _ := r.Context().Value(uidKey).(string)
+		rm := a.gm.CreateRoom(uid, mode, s)
 		a.json(w, map[string]string{"room_id": rm}, 200)
 	}
 }
@@ -174,15 +230,15 @@ func (a *API) ws(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := t.Claims.(jwt.MapClaims)
-	a.gm.HandleWS(w, r, c["sub"].(string), c["username"].(string))
+	sub, _ := c["sub"].(string)
+	un, _ := c["username"].(string)
+	a.gm.HandleWS(w, r, sub, un)
 }
 
 func (a *API) json(w http.ResponseWriter, d any, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	if err := json.NewEncoder(w).Encode(d); err != nil {
-		a.log.Error("ошибка записи json", "err", err)
-	}
+	_ = json.NewEncoder(w).Encode(d)
 }
 
 func (a *API) error(w http.ResponseWriter, msg string, code int) {
@@ -196,7 +252,8 @@ func (a *API) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			a.error(w, "нет токена", 401)
 			return
 		}
-		t, err := jwt.Parse(strings.TrimPrefix(h, "Bearer "), func(t *jwt.Token) (interface{}, error) { return a.secret, nil })
+		tokenStr := strings.TrimPrefix(h, "Bearer ")
+		t, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) { return a.secret, nil })
 		if err != nil || !t.Valid {
 			a.error(w, "неверный токен", 401)
 			return
@@ -214,13 +271,11 @@ func (a *API) corsMiddleware(next http.Handler) http.Handler {
 		allow := a.origins["*"] || a.origins[origin]
 		if allow {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
-			if a.origins["*"] && origin == "" {
-				w.Header().Set("Access-Control-Allow-Origin", "*")
-			}
 		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -229,14 +284,11 @@ func (a *API) corsMiddleware(next http.Handler) http.Handler {
 
 func (a *API) rateLimitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
+		ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+		if ip == "" {
 			ip = r.RemoteAddr
 		}
-		v, ok := a.limit.Load(ip)
-		if !ok {
-			v, _ = a.limit.LoadOrStore(ip, &visitor{limiter: rate.NewLimiter(rate.Limit(10), 20)})
-		}
+		v, _ := a.limit.LoadOrStore(ip, &visitor{limiter: rate.NewLimiter(rate.Limit(10), 20)})
 		vis := v.(*visitor)
 		vis.lastSeen = time.Now()
 		if !vis.limiter.Allow() {
@@ -245,4 +297,73 @@ func (a *API) rateLimitMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (a *API) handleGetLobbies(w http.ResponseWriter, r *http.Request) {
+	list := a.gm.GetActiveLobbies()
+	a.json(w, list, 200)
+}
+
+func (a *API) handleLobbyWS(w http.ResponseWriter, r *http.Request) {
+
+	uid, _ := r.Context().Value(uidKey).(string)
+	username, _ := r.Context().Value(userKey).(string)
+
+	a.gm.HandleWS(w, r, uid, username)
+}
+
+func (a *API) handleWS(w http.ResponseWriter, r *http.Request) {
+	fmt.Printf("[WS_DEBUG] New connection request from IP: %s\n", r.RemoteAddr)
+
+	// 1. Пытаемся взять данные из контекста
+	uid, _ := r.Context().Value(uidKey).(string)
+	user, _ := r.Context().Value(userKey).(string)
+	
+	fmt.Printf("[WS_DEBUG] Context data -> UID: '%s', User: '%s'\n", uid, user)
+
+	// 2. Проверка токена в Query
+	if uid == "" {
+		tokenStr := r.URL.Query().Get("token")
+		if tokenStr == "" {
+			fmt.Println("[WS_DEBUG] No token found in URL query parameters")
+		} else {
+			token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
+				return a.secret, nil
+			})
+
+			if err != nil {
+				fmt.Printf("[WS_DEBUG] JWT Parse Error: %v\n", err)
+			} else if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
+				if s, ok := claims["sub"].(string); ok { uid = s }
+				if u, ok := claims["username"].(string); ok { user = u }
+				fmt.Printf("[WS_DEBUG] Token parsed -> UID from token: '%s', User from token: '%s'\n", uid, user)
+			} else {
+				fmt.Println("[WS_DEBUG] Token is invalid or claims are missing")
+			}
+		}
+	}
+
+	// 3. Пытаемся принудительно достать имя из БД, если его еще нет
+	if uid != "" && (user == "" || user == "Guest") {
+		fmt.Printf("[WS_DEBUG] Attempting DB lookup for UID: %s\n", uid)
+		dbUser, err := a.db.GetUserByID(r.Context(), uid)
+		if err != nil {
+			fmt.Printf("[WS_DEBUG] DB Error: %v\n", err)
+		} else if dbUser != nil {
+			fmt.Printf("[WS_DEBUG] DB Found User: %+v\n", dbUser)
+			user = dbUser.Username
+		} else {
+			fmt.Println("[WS_DEBUG] DB returned nil user (not found)")
+		}
+	}
+
+	// 4. Финальный фолбек (Гость)
+	if uid == "" {
+		uid = fmt.Sprintf("guest_%d", time.Now().UnixNano())
+		user = "Guest_" + uid[len(uid)-4:]
+		fmt.Printf("[WS_DEBUG] AUTH FAILED. Assigned temporary ID: %s\n", user)
+	}
+
+	fmt.Printf("[WS_DEBUG] Final result for Game Manager -> UID: %s, Username: %s\n", uid, user)
+	a.gm.HandleWS(w, r, uid, user)
 }

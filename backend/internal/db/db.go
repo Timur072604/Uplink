@@ -45,8 +45,28 @@ func (d *DB) CreateUser(ctx context.Context, name, hash string) (string, error) 
 	return id, err
 }
 
+func (d *DB) GetLeaderboard(ctx context.Context, limit int) ([]map[string]any, error) {
+    rows, err := d.pool.Query(ctx, "SELECT username, rating FROM users ORDER BY rating ASC LIMIT $1", limit)
+    if err != nil {
+        return nil, err
+    }
+    return pgx.CollectRows(rows, pgx.RowToMap)
+}
+
 func (d *DB) GetUser(ctx context.Context, name string) (*User, error) {
 	rows, err := d.pool.Query(ctx, "SELECT id, username, password_hash as password, rating FROM users WHERE username=$1", name)
+	if err != nil {
+		return nil, err
+	}
+	u, err := pgx.CollectOneRow(rows, pgx.RowToStructByName[User])
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+func (d *DB) GetUserByID(ctx context.Context, id string) (*User, error) {
+	rows, err := d.pool.Query(ctx, "SELECT id, username, password_hash as password, rating FROM users WHERE id=$1", id)
 	if err != nil {
 		return nil, err
 	}
@@ -145,10 +165,4 @@ func (d *DB) GetHistory(ctx context.Context, uid string, limit int, cursor strin
 	return res, next, nil
 }
 
-func (d *DB) GetLeaderboard(ctx context.Context, limit int) ([]map[string]any, error) {
-	rows, err := d.pool.Query(ctx, "SELECT username, rating FROM users ORDER BY rating DESC LIMIT $1", limit)
-	if err != nil {
-		return nil, err
-	}
-	return pgx.CollectRows(rows, pgx.RowToMap)
-}
+

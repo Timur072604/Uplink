@@ -67,19 +67,22 @@ func handleAuth(a *App, isReg bool) {
 		json.NewDecoder(res.Body).Decode(&b)
 
 		if res.StatusCode == 200 {
-			js.Global().Get("localStorage").Call("setItem", "token", b["token"])
+			token := b["token"]
+			js.Global().Get("localStorage").Call("setItem", "token", token)
+			a.fetchUser() 
 			a.navigate("/menu")
 		} else {
 			showError(a, b["error"])
 		}
-	}()
-}
+	}() 
+} 
 
 func showError(a *App, msg string) {
 	el := a.doc.Call("getElementById", "err-log")
-	// Перевод стандартных ошибок, если нужно
 	translatedMsg := msg
-	if msg == "invalid credentials" { translatedMsg = "НЕВЕРНЫЕ_ДАННЫЕ_ДОСТУПА" }
+	if msg == "invalid credentials" { 
+		translatedMsg = "НЕВЕРНЫЕ_ДАННЫЕ_ДОСТУПА" 
+	}
 	
 	el.Set("innerText", ">> " + translatedMsg)
 	el.Get("classList").Call("remove", "hidden")

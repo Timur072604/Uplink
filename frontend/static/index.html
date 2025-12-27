@@ -7,6 +7,60 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="/wasm_exec.js"></script>
     <style>
+
+
+
+
+        #error-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.85);
+    backdrop-filter: blur(10px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    }
+
+        .error-card {
+            background: rgba(15, 15, 25, 0.9);
+            border: 2px solid #ff0055;
+            box-shadow: 0 0 20px rgba(255, 0, 85, 0.3);
+            padding: 2rem;
+            border-radius: 8px;
+            text-align: center;
+            max-width: 400px;
+            width: 90%;
+        }
+
+        .error-card h2 {
+            color: #ff0055;
+            margin-top: 0;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        .error-card p {
+            color: #ccc;
+            margin-bottom: 1.5rem;
+        }
+
+        .error-btn {
+            background: transparent;
+            border: 1px solid #ff0055;
+            color: #ff0055;
+            padding: 0.8rem 2rem;
+            cursor: pointer;
+            text-transform: uppercase;
+            transition: all 0.3s;
+        }
+
+        .error-btn:hover {
+            background: #ff0055;
+            color: white;
+            box-shadow: 0 0 15px #ff0055;
+        }
+
         :root {
             --hud: #00f3ff;
             --hud-dim: rgba(0, 243, 255, 0.15);
@@ -22,10 +76,8 @@
             text-transform: uppercase;
         }
 
-        /* Анимированная сетка на фоне */
         .grid-bg {
             position: fixed;
-            /* Увеличиваем область, чтобы при наклоне не было пустых краев */
             top: -50%;
             left: -50%;
             width: 200%;
@@ -37,9 +89,7 @@
             pointer-events: none;
             z-index: -1;
             
-            /* Эффект перспективы и наклона */
             transform: perspective(1000px) rotateX(60deg);
-            /* Анимация движения */
             animation: grid-move 15s linear infinite;
         }
 
@@ -48,7 +98,6 @@
                 transform: perspective(1000px) rotateX(60deg) translateY(0);
             }
             to {
-                /* Сдвигаем на размер одной ячейки (50px) для бесшовности */
                 transform: perspective(1000px) rotateX(60deg) translateY(50px);
             }
         }
@@ -76,13 +125,30 @@
     </style>
 </head>
 <body>
+
+    <div class="fixed inset-0 z-[-1] overflow-hidden pointer-events-none bg-black">
+    <div class="absolute inset-0" 
+         style="background-image: linear-gradient(rgba(0, 243, 255, 0.05) 1px, transparent 1px), 
+                                 linear-gradient(90deg, rgba(0, 243, 255, 0.05) 1px, transparent 1px);
+                background-size: 50px 50px;
+                background-position: center;
+                animation: grid-move 20s linear infinite;">
+    </div>
+    <div class="absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_0%,black_90%)]"></div>
+</div>
+
+<style>
+@keyframes grid-move {
+    0% { transform: perspective(500px) rotateX(20deg) translateY(0); }
+    100% { transform: perspective(500px) rotateX(20deg) translateY(50px); }
+}
+</style>
     <div class="grid-bg"></div>
 
     <div id="app"></div>
 
     <script>
         const go = new Go();
-        // Загрузка и запуск WebAssembly
         WebAssembly.instantiateStreaming(fetch("/main.wasm"), go.importObject).then((res) => {
             go.run(res.instance);
         }).catch((err) => {
