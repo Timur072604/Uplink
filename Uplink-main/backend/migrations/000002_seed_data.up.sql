@@ -1,0 +1,48 @@
+TRUNCATE TABLE words RESTART IDENTITY CASCADE;
+TRUNCATE TABLE texts RESTART IDENTITY CASCADE;
+
+INSERT INTO words (content, language) VALUES
+                                          ('the', 'en'), ('be', 'en'), ('to', 'en'), ('of', 'en'), ('and', 'en'), ('a', 'en'), ('in', 'en'), ('that', 'en'), ('have', 'en'), ('it', 'en'),
+                                          ('for', 'en'), ('not', 'en'), ('on', 'en'), ('with', 'en'), ('he', 'en'), ('as', 'en'), ('you', 'en'), ('do', 'en'), ('at', 'en'), ('this', 'en'),
+                                          ('but', 'en'), ('his', 'en'), ('by', 'en'), ('from', 'en'), ('they', 'en'), ('we', 'en'), ('say', 'en'), ('her', 'en'), ('she', 'en'), ('or', 'en'),
+                                          ('an', 'en'), ('will', 'en'), ('my', 'en'), ('one', 'en'), ('all', 'en'), ('would', 'en'), ('there', 'en'), ('their', 'en'), ('what', 'en'), ('so', 'en'),
+                                          ('up', 'en'), ('out', 'en'), ('if', 'en'), ('about', 'en'), ('who', 'en'), ('get', 'en'), ('which', 'en'), ('go', 'en'), ('me', 'en'), ('when', 'en'),
+                                          ('make', 'en'), ('can', 'en'), ('like', 'en'), ('time', 'en'), ('no', 'en'), ('just', 'en'), ('him', 'en'), ('know', 'en'), ('take', 'en'), ('people', 'en'),
+                                          ('into', 'en'), ('year', 'en'), ('your', 'en'), ('good', 'en'), ('some', 'en'), ('could', 'en'), ('them', 'en'), ('see', 'en'), ('other', 'en'), ('than', 'en'),
+                                          ('then', 'en'), ('now', 'en'), ('look', 'en'), ('only', 'en'), ('come', 'en'), ('its', 'en'), ('over', 'en'), ('think', 'en'), ('also', 'en'), ('back', 'en'),
+                                          ('и', 'ru'), ('в', 'ru'), ('не', 'ru'), ('он', 'ru'), ('на', 'ru'), ('я', 'ru'), ('что', 'ru'), ('тот', 'ru'), ('быть', 'ru'), ('с', 'ru'),
+                                          ('а', 'ru'), ('весь', 'ru'), ('это', 'ru'), ('как', 'ru'), ('она', 'ru'), ('по', 'ru'), ('но', 'ru'), ('они', 'ru'), ('к', 'ru'), ('у', 'ru'),
+                                          ('ты', 'ru'), ('из', 'ru'), ('мы', 'ru'), ('за', 'ru'), ('вы', 'ru'), ('так', 'ru'), ('же', 'ru'), ('от', 'ru'), ('сказать', 'ru'), ('этот', 'ru'),
+                                          ('который', 'ru'), ('мочь', 'ru'), ('человек', 'ru'), ('о', 'ru'), ('один', 'ru'), ('еще', 'ru'), ('бы', 'ru'), ('такой', 'ru'), ('только', 'ru'), ('себя', 'ru'),
+                                          ('свое', 'ru'), ('какой', 'ru'), ('когда', 'ru'), ('уже', 'ru'), ('для', 'ru'), ('вот', 'ru'), ('кто', 'ru'), ('да', 'ru'), ('говорить', 'ru'), ('год', 'ru'),
+                                          ('знать', 'ru'), ('мой', 'ru'), ('до', 'ru'), ('или', 'ru'), ('если', 'ru'), ('время', 'ru'), ('рука', 'ru'), ('нет', 'ru'), ('самый', 'ru'), ('ни', 'ru'),
+                                          ('стать', 'ru'), ('большой', 'ru'), ('даже', 'ru'), ('другой', 'ru'), ('наш', 'ru'), ('свой', 'ru'), ('ну', 'ru'), ('под', 'ru'), ('где', 'ru'), ('дело', 'ru'),
+                                          ('есть', 'ru'), ('сам', 'ru'), ('раз', 'ru'), ('чтобы', 'ru'), ('два', 'ru'), ('там', 'ru'), ('чем', 'ru'), ('глаз', 'ru'), ('жизнь', 'ru'), ('первый', 'ru');
+
+INSERT INTO texts (content, language, category, length) VALUES
+                                                            ('It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness.', 'en', 'literature', 110),
+                                                            ('Call me Ishmael. Some years ago - never mind how long precisely - having little or no money in my purse.', 'en', 'literature', 104),
+                                                            ('All happy families are alike; each unhappy family is unhappy in its own way.', 'en', 'literature', 76),
+                                                            ('It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife.', 'en', 'literature', 117),
+                                                            ('The sky above the port was the color of television, tuned to a dead channel.', 'en', 'literature', 76),
+                                                            ('func (s *Server) ListenAndServe() error { if s.shuttingDown() { return ErrServerClosed } return s.Serve(ln) }', 'en', 'code', 111),
+                                                            ('public static void main(String[] args) { System.out.println("Hello, World!"); }', 'en', 'code', 79),
+                                                            ('SELECT * FROM users WHERE id = 1 AND active = true ORDER BY created_at DESC;', 'en', 'code', 76),
+                                                            ('const express = require("express"); const app = express(); app.listen(3000);', 'en', 'code', 76),
+                                                            ('if __name__ == "__main__": print("This is a script") else: pass', 'en', 'code', 63),
+                                                            ('The quick brown fox jumps over the lazy dog.', 'en', 'general', 44),
+                                                            ('Typing speed is usually measured in words per minute.', 'en', 'general', 53),
+                                                            ('Practice makes perfect when it comes to learning new skills.', 'en', 'general', 60),
+                                                            ('A journey of a thousand miles begins with a single step.', 'en', 'general', 56),
+                                                            ('Gravity is a force that pulls objects toward each other.', 'en', 'science', 54),
+                                                            ('Photosynthesis is the process used by plants to convert light energy.', 'en', 'science', 69),
+                                                            ('E = mc^2 is the world most famous equation derived by Einstein.', 'en', 'science', 63),
+                                                            ('В начале июля, в чрезвычайно жаркое время, под вечер, один молодой человек вышел из своей каморки.', 'ru', 'literature', 98),
+                                                            ('Мой дядя самых честных правил, когда не в шутку занемог, он уважать себя заставил и лучше выдумать не мог.', 'ru', 'literature', 106),
+                                                            ('Все счастливые семьи похожи друг на друга, каждая несчастливая семья несчастлива по-своему.', 'ru', 'literature', 91),
+                                                            ('Я к вам пишу – чего же боле? Что я могу еще сказать? Теперь, я знаю, в вашей воле меня презреньем наказать.', 'ru', 'literature', 107),
+                                                            ('Однажды в студеную зимнюю пору я из лесу вышел; был сильный мороз.', 'ru', 'literature', 66),
+                                                            ('Съешь же ещё этих мягких французских булок, да выпей чаю.', 'ru', 'general', 57),
+                                                            ('Скорость печати зависит от мышечной памяти и регулярных тренировок.', 'ru', 'general', 67),
+                                                            ('В чащах юга жил бы цитрус? Да, но фальшивый экземпляр!', 'ru', 'general', 54),
+                                                            ('Широкая электрификация южных губерний даст мощный толчок подъёму сельского хозяйства.', 'ru', 'general', 85);
